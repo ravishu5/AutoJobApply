@@ -18,13 +18,18 @@ user_profile.json
 *.key
 
 # Application Data, Resumes, and Local Storage
-data/resumes/
+data/resumes/*
+!data/resumes/Candidate_Resume.pdf
+!data/resumes/candidate_resume.pdf
+!data/resumes/.gitkeep
 data/screenshots/
 data/job_hunt.db
 data/*.db
 data/Job_Hunt_Tracker.xlsx
 data/*.xlsx
 *.pdf
+!data/resumes/Candidate_Resume.pdf
+!data/resumes/candidate_resume.pdf
 
 # Logs & Operating System Files
 *.log
