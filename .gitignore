@@ -27,6 +27,9 @@ data/job_hunt.db
 data/*.db
 data/Job_Hunt_Tracker.xlsx
 data/*.xlsx
+data/linkedin_session.json
+data/*session.json
+data/*.json
 *.pdf
 !data/resumes/Candidate_Resume.pdf
 !data/resumes/candidate_resume.pdf

@@ -29,21 +29,31 @@ class ScreeningAgent:
 
         # Years of experience
         if "years of experience" in q_lower or "how many years" in q_lower:
-            exp_band = self.profile.constraints_and_preferences.get("experience_band", {})
-            min_yrs = exp_band.get("minimum_years", 4)
+            yrs = getattr(self.profile, "years_of_experience", None)
+            if yrs is None:
+                exp_band = self.profile.constraints_and_preferences.get("experience_band", {})
+                yrs = exp_band.get("minimum_years", 2)
             # If asking for a specific skill:
             for skill in self.profile.all_skills:
                 if skill.lower() in q_lower:
-                    return str(min_yrs)
-            return str(min_yrs)
+                    return str(yrs)
+            return str(yrs)
 
         # Notice period
         if "notice period" in q_lower or "how soon can you start" in q_lower:
+            if any(w in q_lower for w in ["day", "days", "0 to", "number", "in days"]):
+                return "15"
             return "Immediately / 2 weeks"
 
-        # Salary expectations
-        if any(w in q_lower for w in ["salary expectation", "compensation expectation", "desired salary"]):
-            return self.profile.constraints_and_preferences.get("compensation_preference", "Competitive / Market Rate")
+        # Salary expectations / CTC (Cost to Company)
+        if any(w in q_lower for w in ["ctc", "salary expectation", "compensation expectation", "desired salary", "current ctc", "expected ctc"]):
+            # If asking for numeric or CTC in numbers (common in LinkedIn Easy Apply numeric fields)
+            if any(w in q_lower for w in ["current ctc", "current salary", "ctc"]):
+                return "1200000"
+            if any(w in q_lower for w in ["expected ctc", "expected salary"]):
+                return "1800000"
+            comp = self.profile.constraints_and_preferences.get("compensation_preference", "Competitive")
+            return "1200000" if field_type in ("number", "tel") else comp
 
         # Remote / Relocation
         if "relocate" in q_lower or "willing to relocate" in q_lower:

@@ -107,6 +107,32 @@ class Database:
                     sent_at TEXT
                 )
             """)
+
+            # Sent connections table (Rate Limiting & Tracking)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS sent_connections (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    profile_url TEXT NOT NULL,
+                    name TEXT,
+                    company TEXT,
+                    note TEXT,
+                    status TEXT DEFAULT 'sent',
+                    sent_at TEXT
+                )
+            """)
+
+            # Dynamic migrations for optional columns
+            for col_sql in [
+                "ALTER TABLE jobs ADD COLUMN hiring_manager_name TEXT",
+                "ALTER TABLE jobs ADD COLUMN hiring_manager_url TEXT",
+                "ALTER TABLE jobs ADD COLUMN is_early_applicant INTEGER DEFAULT 0",
+                "ALTER TABLE applications ADD COLUMN recruiter_status TEXT"
+            ]:
+                try:
+                    conn.execute(col_sql)
+                except sqlite3.OperationalError:
+                    pass
+
             conn.commit()
 
     # --- Jobs Operations ---
@@ -248,6 +274,58 @@ class Database:
             rows = conn.execute("SELECT * FROM referral_contacts ORDER BY id DESC").fetchall()
             return [dict(r) for r in rows]
 
+    # --- Connection Rate Limiting & Tracking ---
+    def record_sent_connection(
+        self,
+        profile_url: str,
+        name: str = "",
+        company: str = "",
+        note: str = "",
+        status: str = "sent"
+    ):
+        with self.get_connection() as conn:
+            conn.execute("""
+                INSERT INTO sent_connections (profile_url, name, company, note, status, sent_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                profile_url,
+                name,
+                company,
+                note,
+                status,
+                datetime.now(timezone.utc).isoformat()
+            ))
+            conn.commit()
+
+    def get_daily_connection_count(self, date_str: Optional[str] = None) -> int:
+        target_date = date_str or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        with self.get_connection() as conn:
+            row = conn.execute("""
+                SELECT COUNT(*) FROM sent_connections
+                WHERE sent_at LIKE ?
+            """, (f"{target_date}%",)).fetchone()
+            return row[0] if row else 0
+
+    def can_send_connection(self, max_daily: int = 15) -> bool:
+        return self.get_daily_connection_count() < max_daily
+
+    def update_job_hiring_manager(self, job_id: str, name: str, url: str):
+        with self.get_connection() as conn:
+            conn.execute("""
+                UPDATE jobs SET hiring_manager_name = ?, hiring_manager_url = ?
+                WHERE id = ?
+            """, (name, url, job_id))
+            conn.commit()
+
+    def update_application_recruiter_status(self, company: str, title: str, recruiter_status: str) -> bool:
+        with self.get_connection() as conn:
+            cursor = conn.execute("""
+                UPDATE applications SET recruiter_status = ?
+                WHERE LOWER(company) LIKE LOWER(?) AND LOWER(title) LIKE LOWER(?)
+            """, (recruiter_status, f"%{company}%", f"%{title}%"))
+            conn.commit()
+            return cursor.rowcount > 0
+
     # --- Metrics ---
     def get_metrics(self) -> Dict[str, Any]:
         with self.get_connection() as conn:
@@ -256,6 +334,7 @@ class Database:
             applied = conn.execute("SELECT COUNT(*) FROM applications WHERE status IN ('submitted', 'applied')").fetchone()[0]
             leads = conn.execute("SELECT COUNT(*) FROM linkedin_posts").fetchone()[0]
             referrals = conn.execute("SELECT COUNT(*) FROM referral_contacts").fetchone()[0]
+            sent_today = self.get_daily_connection_count()
             avg_score_row = conn.execute("SELECT AVG(match_score) FROM jobs WHERE match_score > 0").fetchone()
             avg_score = round(avg_score_row[0], 1) if avg_score_row and avg_score_row[0] else 0.0
 
@@ -265,5 +344,6 @@ class Database:
                 "applied_jobs": applied,
                 "linkedin_leads": leads,
                 "referral_contacts": referrals,
+                "sent_connections_today": sent_today,
                 "avg_match_score": avg_score
             }

@@ -74,6 +74,13 @@ class CandidateProfile:
         roles = self.target_roles
         return roles[0] if roles else "Software Engineer"
 
+    @property
+    def years_of_experience(self) -> int:
+        if "years_of_experience" in self.constraints_and_preferences:
+            return int(self.constraints_and_preferences["years_of_experience"])
+        exp_band = self.constraints_and_preferences.get("experience_band", {})
+        return int(exp_band.get("minimum_years", 2))
+
 
 def load_candidate_profile(config_path: str = "config/candidate_profile.yaml") -> CandidateProfile:
     """Load candidate profile from YAML file with fallback to defaults."""

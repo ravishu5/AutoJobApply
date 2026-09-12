@@ -128,11 +128,17 @@ from core.profile import load_candidate_profile, save_candidate_profile, Candida
 from core.resume_parser import extract_text_from_pdf_bytes, generate_resume_pdf
 from core.scorer import score_job_with_gemini, calculate_ats_match
 from scrapers.job_scraper import JobScraper
+from scrapers.auth_linkedin_scraper import AuthenticatedLinkedInScraper
 from scrapers.contact_finder import find_hiring_contact
 from networking.post_scanner import LinkedInPostScanner
 from networking.referral_finder import ReferralFinder
+from networking.alumni_mapper import AlumniMapper
 from networking.emailer import generate_cold_email_draft, send_cold_email
+from networking.connection_sender import ConnectionSender
+from networking.post_engager import generate_tailored_post_comment, PostEngager
 from automation.apply_engine import ApplyEngine, detect_platform
+from automation.browser_manager import BrowserManager, interactive_linkedin_login
+from automation.status_sync import LinkedInStatusSync
 from storage.database import Database
 from storage.excel_tracker import export_tracker_xlsx
 
@@ -236,6 +242,45 @@ with tab_jobs:
         st.write("")
         trigger_search = st.button("🔍 Search Jobs", use_container_width=True, type="primary")
 
+    is_li_auth = BrowserManager.is_linkedin_authenticated()
+    col_eb1, col_eb2 = st.columns([2.5, 1.5])
+    with col_eb2:
+        trigger_early_bird = st.button(
+            "⚡ Early-Bird LinkedIn (<10 Applicants)",
+            disabled=not is_li_auth,
+            help="Member-only search: Easy Apply & <10 applicants.",
+            use_container_width=True
+        )
+
+    if trigger_early_bird and search_query:
+        with st.status(f"Scanning member-only early applicant roles (<10 applicants) for '{search_query}'...", expanded=True) as status:
+            auth_scraper = AuthenticatedLinkedInScraper()
+            jobs = asyncio.run(auth_scraper.search_early_bird_jobs(
+                keywords=search_query,
+                location=search_loc,
+                easy_apply_only=True,
+                under_10_applicants=True,
+                is_remote="remote" in search_loc.lower(),
+                limit=15
+            ))
+            st.write(f"Discovered {len(jobs)} early-bird jobs. Scoring with ATS engine...")
+            resume_text = st.session_state.resume_text or f"{profile.name} {profile.headline} {', '.join(profile.all_skills)}"
+            for j in jobs:
+                res = score_job_with_gemini(
+                    resume_text=resume_text,
+                    job_title=j["title"],
+                    company=j["company"],
+                    job_description=j.get("description", ""),
+                    candidate_skills=profile.all_skills
+                )
+                j["match_score"] = res["match_score"]
+                j["matched_keywords"] = res["matched_keywords"]
+                j["missing_keywords"] = res["missing_keywords"]
+                db.upsert_job(j)
+            export_tracker_xlsx("data/Job_Hunt_Tracker.xlsx", db)
+            status.update(label=f"✅ Ingested {len(jobs)} early-bird jobs with ATS fit scores!", state="complete")
+            st.rerun()
+
     if trigger_search and search_query:
         with st.status(f"Searching for '{search_query}' across {len(platforms_selected)} platforms...", expanded=True) as status:
             scraper = JobScraper()
@@ -329,6 +374,41 @@ with tab_apply:
     st.subheader("Playwright Intelligent Auto-Apply Engine")
     st.caption("Autonomously handles LinkedIn Easy Apply, Greenhouse, Lever, Ashby, and generic ATS application forms.")
 
+    # -------------------------------------------------------------------------
+    # LinkedIn Session Authentication Status Card
+    # -------------------------------------------------------------------------
+    is_li_auth = BrowserManager.is_linkedin_authenticated()
+    with st.container():
+        col_li_stat, col_li_btn = st.columns([2.2, 1.8])
+        with col_li_stat:
+            if is_li_auth:
+                st.markdown("🟢 **LinkedIn Authentication:** `CONNECTED & PERSISTED` &nbsp;*(Active session ready for Easy Apply)*")
+            else:
+                st.markdown("🟡 **LinkedIn Authentication:** `NOT CONNECTED` &nbsp;*(Sign-in required for automated Easy Apply)*")
+        with col_li_btn:
+            col_b1, col_b2 = st.columns([1.2, 0.8] if is_li_auth else [1, 0.01])
+            with col_b1:
+                btn_label = "🔄 Refresh Session" if is_li_auth else "🔑 1-Click Log In to LinkedIn"
+                if st.button(btn_label, use_container_width=True, type="primary" if not is_li_auth else "secondary"):
+                    with st.status("🌐 Launching interactive browser for LinkedIn login...", expanded=True) as login_status:
+                        st.write("A browser window is opening. Please complete your login and any 2FA/CAPTCHA challenges.")
+                        res = asyncio.run(interactive_linkedin_login())
+                        if res["success"]:
+                            login_status.update(label="✅ LinkedIn Session Successfully Saved!", state="complete")
+                            st.success(res["message"])
+                            st.rerun()
+                        else:
+                            login_status.update(label="❌ Login Timed Out or Failed", state="error")
+                            st.error(res["message"])
+            with col_b2:
+                if is_li_auth:
+                    if st.button("❌ Disconnect", use_container_width=True):
+                        BrowserManager.clear_linkedin_session()
+                        st.success("Cleared saved LinkedIn session.")
+                        st.rerun()
+
+    st.divider()
+
     shortlisted_jobs = db.get_all_jobs(min_score=50.0)
 
     if not shortlisted_jobs:
@@ -362,17 +442,18 @@ with tab_apply:
             st.write(f"📱 **Phone:** {profile.contact.phone}")
             st.write(f"🔗 **LinkedIn:** {profile.contact.linkedin_url}")
 
+        # Prepare resume PDF path
+        pdf_path = "data/resumes/candidate_resume.pdf"
+        if not os.path.exists(pdf_path):
+            pdf_path = "data/resumes/Candidate_Resume.pdf"
+        os.makedirs(os.path.dirname(pdf_path), exist_ok=True)
+        if not os.path.exists(pdf_path):
+            resume_content = st.session_state.resume_text or f"{profile.name}\n{profile.headline}\n{profile.experience}"
+            generate_resume_pdf(resume_content, pdf_path, candidate_name=profile.name, target_role=target_job["title"], company_name=target_job["company"])
+
         if apply_now_btn:
             with st.status(f"Automating application for {target_job['title']} @ {target_job['company']}...", expanded=True) as status:
-                # Ensure resume PDF is ready
-                pdf_path = "data/resumes/Candidate_Resume.pdf"
-                os.makedirs(os.path.dirname(pdf_path), exist_ok=True)
-                if not os.path.exists(pdf_path):
-                    resume_content = st.session_state.resume_text or f"{profile.name}\n{profile.headline}\n{profile.experience}"
-                    generate_resume_pdf(resume_content, pdf_path, candidate_name=profile.name, target_role=target_job["title"], company_name=target_job["company"])
-
                 apply_engine = ApplyEngine(profile=profile, headless=headless_mode, dry_run=dry_run_mode)
-
                 st.write(f"🌐 Launching Playwright browser in {'dry-run' if dry_run_mode else 'live'} mode...")
                 apply_res = asyncio.run(apply_engine.apply_to_job(
                     job_url=target_job["job_url"],
@@ -380,7 +461,7 @@ with tab_apply:
                     dry_run=dry_run_mode
                 ))
 
-                st.session_state.apply_results[target_job["id"]] = apply_res
+                st.session_state[f"job_apply_res_{target_job['id']}"] = apply_res
 
                 # Record in database
                 app_status = "submitted" if apply_res.get("status") == "submitted" else "prefilled"
@@ -398,12 +479,67 @@ with tab_apply:
 
                 if apply_res.get("success"):
                     status.update(label="✅ Application workflow completed!", state="complete")
-                    st.success(f"**Result:** {apply_res.get('message')}")
-                    if apply_res.get("screenshot") and os.path.exists(apply_res["screenshot"]):
-                        st.image(apply_res["screenshot"], caption="Browser Confirmation Screenshot", use_container_width=True)
                 else:
                     status.update(label="⚠️ Application encountered an issue", state="error")
-                    st.error(f"**Error:** {apply_res.get('message')}")
+
+        # Persistent Application Result & Action Card
+        active_res = st.session_state.get(f"job_apply_res_{target_job['id']}")
+        if active_res:
+            st.divider()
+            if active_res.get("success"):
+                if active_res.get("status") == "submitted":
+                    st.success(f"🎉 **Application Submitted Live!** {active_res.get('message')}")
+                    if active_res.get("screenshot") and os.path.exists(active_res["screenshot"]):
+                        st.image(active_res["screenshot"], caption="Submission Confirmation Screenshot", use_container_width=True)
+                elif active_res.get("status") == "dry_run_completed":
+                    st.success(f"📋 **Form Prefilled (Dry-Run Mode):** {active_res.get('message')}")
+                    if active_res.get("screenshot") and os.path.exists(active_res["screenshot"]):
+                        st.image(active_res["screenshot"], caption="Prefill Verification Screenshot", use_container_width=True)
+
+                    st.info("💡 **Dry Run Verified:** All form fields, phone, resume, and screening questions have been validated above.")
+                    col_sub1, col_sub2 = st.columns([1, 1])
+                    with col_sub1:
+                        if st.button("🚀 Confirm & Submit Application Now (Live)", key=f"btn_live_submit_{target_job['id']}", type="primary", use_container_width=True):
+                            with st.status(f"Submitting live application to {target_job['company']}...", expanded=True) as live_status:
+                                live_engine = ApplyEngine(profile=profile, headless=headless_mode, dry_run=False)
+                                st.write("🌐 Opening browser in live submission mode...")
+                                live_res = asyncio.run(live_engine.apply_to_job(
+                                    job_url=target_job["job_url"],
+                                    resume_pdf_path=pdf_path,
+                                    dry_run=False
+                                ))
+                                st.session_state[f"job_apply_res_{target_job['id']}"] = live_res
+
+                                if live_res.get("success") and live_res.get("status") == "submitted":
+                                    live_status.update(label="🎉 Application submitted successfully!", state="complete")
+                                    db.record_application(
+                                        job_id=target_job["id"],
+                                        company=target_job["company"],
+                                        title=target_job["title"],
+                                        applied_to=target_job["job_url"],
+                                        apply_method=live_res.get("platform", "web"),
+                                        status="submitted",
+                                        screenshot_path=live_res.get("screenshot", ""),
+                                        notes=live_res.get("message", "")
+                                    )
+                                    export_tracker_xlsx("data/Job_Hunt_Tracker.xlsx", db)
+                                    st.rerun()
+                                else:
+                                    live_status.update(label="⚠️ Live submission response", state="error")
+                                    st.error(f"**Error:** {live_res.get('message')}")
+                                    st.rerun()
+                    with col_sub2:
+                        if st.button("🔄 Reset / Clear Prefill", key=f"btn_reset_{target_job['id']}", use_container_width=True):
+                            st.session_state.pop(f"job_apply_res_{target_job['id']}", None)
+                            st.rerun()
+                else:
+                    st.info(f"**Status:** {active_res.get('message')}")
+                    if active_res.get("screenshot") and os.path.exists(active_res["screenshot"]):
+                        st.image(active_res["screenshot"], caption="Stepper Progress Screenshot", use_container_width=True)
+            else:
+                st.error(f"**Error:** {active_res.get('message')}")
+                if active_res.get("screenshot") and os.path.exists(active_res["screenshot"]):
+                    st.image(active_res["screenshot"], caption="Error State Screenshot", use_container_width=True)
 
 
 # =============================================================================
@@ -456,20 +592,44 @@ with tab_posts:
                         st.markdown(f"🔗 [View LinkedIn Post]({p['post_url']})")
 
                 with col_b2:
-                    if p.get("email"):
-                        with st.popover("✉️ Draft & Send Cold Email"):
-                            draft = generate_cold_email_draft(
-                                candidate_name=profile.name,
-                                candidate_role=profile.primary_role,
-                                candidate_skills=profile.core_skills,
-                                company=p.get("company", "Your Team"),
-                                job_title=p.get("role", "Software Engineer"),
-                                recipient_name=p.get("author", "")
-                            )
-                            subj = st.text_input("Subject", value=draft["subject"], key=f"subj_{p['id']}")
-                            body = st.text_area("Body", value=draft["body"], height=200, key=f"body_{p['id']}")
-                            if st.button("Send Email", key=f"send_{p['id']}", type="primary"):
-                                st.info("Simulated email send. In live mode, connect your Gmail App Password in config/settings.yaml.")
+                    col_p1, col_p2 = st.columns(2)
+                    with col_p1:
+                        if p.get("email"):
+                            with st.popover("✉️ Cold Email"):
+                                draft = generate_cold_email_draft(
+                                    candidate_name=profile.name,
+                                    candidate_role=profile.primary_role,
+                                    candidate_skills=profile.core_skills,
+                                    company=p.get("company", "Your Team"),
+                                    job_title=p.get("role", "Software Engineer"),
+                                    recipient_name=p.get("author", "")
+                                )
+                                subj = st.text_input("Subject", value=draft["subject"], key=f"subj_{p['id']}")
+                                body = st.text_area("Body", value=draft["body"], height=200, key=f"body_{p['id']}")
+                                if st.button("Send Email", key=f"send_{p['id']}", type="primary"):
+                                    st.info("Simulated email send. In live mode, connect your Gmail App Password in config/settings.yaml.")
+                    with col_p2:
+                        if p.get("post_url"):
+                            with st.popover("💬 Post Comment"):
+                                comment_draft = generate_tailored_post_comment(
+                                    candidate_name=profile.name,
+                                    candidate_headline=profile.headline,
+                                    target_role=p.get("role", profile.primary_role),
+                                    company=p.get("company", "Your Team"),
+                                    core_skills=profile.core_skills
+                                )
+                                comm_val = st.text_area("Tailored Comment", value=comment_draft, height=120, key=f"comm_{p['id']}")
+                                can_pub = BrowserManager.is_linkedin_authenticated()
+                                if st.button("🚀 Publish", key=f"pub_{p['id']}", disabled=not can_pub, type="primary"):
+                                    with st.status("Publishing comment via authenticated browser...", expanded=True) as pub_st:
+                                        eng = PostEngager(db=db)
+                                        pub_r = asyncio.run(eng.publish_comment(post_url=p["post_url"], comment_text=comm_val))
+                                        if pub_r["success"]:
+                                            pub_st.update(label="✅ Comment Published!", state="complete")
+                                            st.success(pub_r["message"])
+                                        else:
+                                            pub_st.update(label="❌ Failed to publish", state="error")
+                                            st.error(pub_r["message"])
 
 
 # =============================================================================
@@ -479,7 +639,7 @@ with tab_referrals:
     st.subheader("LinkedIn Referral Finder & Connection Note Generator")
     st.caption("Locate Engineering Managers, Leads, and Recruiters at target companies and generate tailored 300-char connection requests.")
 
-    col_r1, col_r2, col_r3 = st.columns([2.5, 2, 1.5])
+    col_r1, col_r2, col_r3, col_r4 = st.columns([2.5, 2, 1.2, 1.2])
     with col_r1:
         target_company = st.text_input("Target Company Name", value="Stripe", placeholder="e.g. Stripe, Google, Datadog")
     with col_r2:
@@ -487,7 +647,18 @@ with tab_referrals:
     with col_r3:
         st.write("")
         st.write("")
-        find_refs_btn = st.button("🔍 Find Top Profiles", use_container_width=True, type="primary")
+        find_refs_btn = st.button("🔍 Find Leaders", use_container_width=True, type="primary")
+    with col_r4:
+        st.write("")
+        st.write("")
+        find_alumni_btn = st.button("🎓 Find Alumni", use_container_width=True, help="Discovers alumni from your university (e.g. NIT Rourkela) at target company.")
+
+    if find_alumni_btn and target_company:
+        with st.spinner(f"Mapping college alumni at {target_company}..."):
+            alumni_mapper = AlumniMapper(profile=profile, db=db)
+            alumni = alumni_mapper.map_alumni_at_company(company=target_company, target_role=target_ref_role)
+            st.success(f"Discovered {len(alumni)} university alumni at {target_company}!")
+            st.rerun()
 
     if find_refs_btn and target_company:
         with st.spinner(f"Mapping key technical stakeholders at {target_company}..."):
@@ -535,6 +706,25 @@ with tab_referrals:
                 with col_n2:
                     st.markdown("**Referral Request InMail / Message:**")
                     st.code(c.get("referral_pitch", ""), language="text")
+
+                daily_sent = db.get_daily_connection_count()
+                can_send = db.can_send_connection(max_daily=15) and BrowserManager.is_linkedin_authenticated()
+                if st.button(f"🚀 Send Connection Request ({daily_sent}/15 sent today)", key=f"btn_send_conn_{c['id']}", disabled=not can_send, type="primary"):
+                    with st.status(f"Sending personalized connection request to {c.get('name')}...", expanded=True) as conn_status:
+                        cs = ConnectionSender(db=db)
+                        conn_res = asyncio.run(cs.send_connection_request(
+                            profile_url=c.get("linkedin_url", ""),
+                            note=c.get("connection_note", ""),
+                            name=c.get("name", "Contact"),
+                            company=c.get("company", "")
+                        ))
+                        if conn_res["success"]:
+                            conn_status.update(label=f"✅ {conn_res['message']}", state="complete")
+                            st.success(conn_res["message"])
+                            st.rerun()
+                        else:
+                            conn_status.update(label=f"❌ {conn_res['message']}", state="error")
+                            st.error(conn_res["message"])
 
 
 # =============================================================================
@@ -623,17 +813,33 @@ with tab_excel:
 
     st.divider()
 
-    # Excel Download Button
-    excel_path = "data/Job_Hunt_Tracker.xlsx"
-    export_tracker_xlsx(excel_path, db)
-    with open(excel_path, "rb") as f:
-        st.download_button(
-            label="📥 Download Master Spreadsheet (Job_Hunt_Tracker.xlsx)",
-            data=f.read(),
-            file_name="Job_Hunt_Tracker.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary"
-        )
+    # Actions: Excel Download & LinkedIn Status Sync
+    col_t1, col_t2 = st.columns([1.5, 1])
+    with col_t1:
+        excel_path = "data/Job_Hunt_Tracker.xlsx"
+        export_tracker_xlsx(excel_path, db)
+        with open(excel_path, "rb") as f:
+            st.download_button(
+                label="📥 Download Master Spreadsheet (Job_Hunt_Tracker.xlsx)",
+                data=f.read(),
+                file_name="Job_Hunt_Tracker.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+                use_container_width=True
+            )
+    with col_t2:
+        is_li_auth = BrowserManager.is_linkedin_authenticated()
+        if st.button("🔄 Sync LinkedIn Recruiter Status", disabled=not is_li_auth, use_container_width=True, help="Scrapes LinkedIn applied tracker for 'Viewed' and 'Downloaded' signals."):
+            with st.status("Syncing applied jobs history and recruiter views...", expanded=True) as sync_status:
+                syncer = LinkedInStatusSync(db=db)
+                sync_res = asyncio.run(syncer.sync_applications())
+                if sync_res["success"]:
+                    sync_status.update(label=f"✅ {sync_res['message']}", state="complete")
+                    st.success(sync_res["message"])
+                    st.rerun()
+                else:
+                    sync_status.update(label=f"❌ {sync_res['message']}", state="error")
+                    st.error(sync_res["message"])
 
     st.write("")
     table_view = st.radio("Select View", ["All Jobs", "Applications Log", "LinkedIn Post Leads", "Referrals Network"], horizontal=True)

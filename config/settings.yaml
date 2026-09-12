@@ -48,5 +48,5 @@ networking:
     use_tls: true
     username: "${SMTP_USER}"
     password: "${SMTP_PASS}"
-    from_name: "Ravi Kumar"
+    from_name: "Ravi Shankar"
     from_email: "${SMTP_USER}"

@@ -22,6 +22,7 @@ from networking.post_scanner import LinkedInPostScanner
 from networking.referral_finder import ReferralFinder
 from networking.emailer import generate_cold_email_draft, send_cold_email
 from automation.apply_engine import ApplyEngine
+from automation.browser_manager import BrowserManager, interactive_linkedin_login
 from storage.database import Database
 from storage.excel_tracker import export_tracker_xlsx
 
@@ -166,6 +167,10 @@ class SparkJobAgent:
             return []
 
         console.print(f"[bold magenta]🚀 Starting automated application flow for {len(top_jobs)} jobs...[/bold magenta]")
+        if BrowserManager.is_linkedin_authenticated():
+            console.print("[bold green]✓ LinkedIn persistent session active (Easy Apply enabled)[/bold green]")
+        else:
+            console.print("[yellow]Notice: LinkedIn session not detected. Run 'python spark_agent.py --login-linkedin' to authenticate for Easy Apply.[/yellow]")
         results = []
 
         # Ensure PDF resume exists for uploads
@@ -255,17 +260,40 @@ def main():
     parser.add_argument("--role", type=str, default=None, help="Target job role")
     parser.add_argument("--location", type=str, default=None, help="Target location")
     parser.add_argument("--resume", type=str, default=None, help="Path to resume PDF")
+    parser.add_argument("--apply-url", type=str, default=None, help="Apply directly to a specific job URL")
     parser.add_argument("--live", action="store_true", help="Disable dry-run mode (enable live submissions)")
     parser.add_argument("--sync-excel", action="store_true", help="Sync database to Excel workbook")
+    parser.add_argument("--login-linkedin", action="store_true", help="Launch interactive browser to log into LinkedIn and save persistent session")
 
     args = parser.parse_args()
+
+    if args.login_linkedin:
+        console.print("[bold cyan]Opening interactive browser for LinkedIn login...[/bold cyan]")
+        res = asyncio.run(interactive_linkedin_login())
+        if res["success"]:
+            console.print(f"[bold green]✓ {res['message']}[/bold green]")
+        else:
+            console.print(f"[bold red]✗ {res['message']}[/bold red]")
+        return
 
     agent = SparkJobAgent(
         resume_pdf_path=args.resume,
         dry_run=not args.live
     )
 
-    if args.run_all or len(sys.argv) == 1:
+    if args.apply_url:
+        console.print(f"[bold cyan]Applying to {args.apply_url} (Live Submission: {args.live})...[/bold cyan]")
+        pdf_path = args.resume or "data/resumes/candidate_resume.pdf"
+        if not os.path.exists(pdf_path):
+            pdf_path = "data/resumes/Candidate_Resume.pdf"
+        apply_res = asyncio.run(agent.apply_engine.apply_to_job(
+            job_url=args.apply_url,
+            resume_pdf_path=pdf_path,
+            dry_run=not args.live
+        ))
+        console.print(f"[bold green]Result:[/bold green] {apply_res}")
+        agent.sync_to_excel()
+    elif args.run_all or len(sys.argv) == 1:
         asyncio.run(agent.run_full_pipeline(role=args.role, location=args.location))
     elif args.search_only:
         agent.run_discovery(role=args.role, location=args.location)

@@ -93,6 +93,14 @@ python spark_agent.py --scan-posts --role "AI Engineer"
 python spark_agent.py --find-referrals "Stripe"
 ```
 
+### 1-Click Persistent LinkedIn Authentication (For Easy Apply)
+```bash
+python spark_agent.py --login-linkedin
+# OR
+python -m automation.linkedin_auth
+```
+*Opens a browser window to log in and solve 2FA/CAPTCHA once. Persists `data/linkedin_session.json` for all automated runs.*
+
 ---
 
 ## 🖥️ Modern Web Dashboard
@@ -102,13 +110,13 @@ Launch the interactive UI:
 streamlit run app.py
 ```
 
-### Dashboard Tabs:
-- 💼 **Job Discovery Hub**: Search multi-board, filter by score, inspect job descriptions.
-- 🤖 **Auto-Apply Center**: 1-click Playwright execution with screenshot review.
-- 📢 **LinkedIn Hiring Radar**: View real-time hiring posts and send recruiter cold emails.
-- 🤝 **Referral Network**: View top contacts and copy custom 300-char connection notes.
+### Dashboard Tabs & LinkedIn Superpowers:
+- 💼 **Job Discovery Hub**: Multi-board search + **⚡ Early-Bird LinkedIn Search (<10 Applicants & Easy Apply)**.
+- 🤖 **Auto-Apply Center**: 1-Click LinkedIn Login/Session Status, Easy Apply with **Hiring Manager Unmasking**.
+- 📢 **LinkedIn Hiring Radar**: Real-time hiring post scanner + **💬 1-Click Tailored Comment Publisher** & Recruiter outreach.
+- 🤝 **Referral Network**: Leader discovery + **🎓 College Alumni Mapper (e.g. NIT Rourkela)** + **🚀 1-Click Connection Sender** with daily safety quotas.
 - 🎯 **Resume & ATS Auditor**: Ingest PDF resume, parse skills, and audit match score against any JD.
-- 📊 **Master Tracker & Excel**: Live relational view and 1-click download of `Job_Hunt_Tracker.xlsx`.
+- 📊 **Master Tracker & Excel**: Live relational view + **🔄 Sync LinkedIn Recruiter Activity (Viewed, Downloaded)** + 1-click download of `Job_Hunt_Tracker.xlsx`.
 
 ---
 
