@@ -1,0 +1,43 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments & Virtual Environments
+.env
+*.env
+.venv/
+venv/
+ENV/
+env/
+
+# Personal Data & Credentials
+config/candidate_profile.yaml
+user_profile.json
+*.pem
+*.key
+
+# Application Data, Resumes, and Local Storage
+data/resumes/
+data/screenshots/
+data/job_hunt.db
+data/*.db
+data/Job_Hunt_Tracker.xlsx
+data/*.xlsx
+*.pdf
+
+# Logs & Operating System Files
+*.log
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE & Editor Files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace

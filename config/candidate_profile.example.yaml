@@ -1,0 +1,67 @@
+# =============================================================================
+# candidate_profile.example.yaml — Template Candidate Profile
+# Copy this file to candidate_profile.yaml and fill in your details.
+# =============================================================================
+
+candidate:
+  name: "Your Full Name"
+  headline: "Software Engineer | Python, Cloud, AI"
+  location: "City, Country"
+  contact:
+    phone: "+1 234 567 8900"
+    email: "your.email@example.com"
+    links:
+      - platform: "linkedin"
+        url: "https://www.linkedin.com/in/yourprofile"
+        evidence: "resume"
+      - platform: "github"
+        url: "https://github.com/yourhandle"
+        evidence: "resume"
+
+education:
+  - degree: "Bachelor of Science / Technology in Computer Science"
+    institution: "University / Institute Name"
+    period_or_graduation: "2020 - 2024"
+    grade: "GPA or Percentage"
+    evidence: "resume"
+
+experience:
+  - company: "Example Tech Company"
+    title: "Software Engineer"
+    period: "2024 – Present"
+    location: "Remote / City"
+    bullets:
+      - "Built scalable backend services using Python and FastAPI."
+      - "Implemented automated pipelines and cloud infrastructure."
+    evidence: "resume"
+
+technical_skills:
+  core:
+    - "Python"
+    - "FastAPI"
+    - "Docker"
+    - "PostgreSQL"
+  strong_supporting:
+    - "Redis"
+    - "AWS"
+    - "REST APIs"
+  supporting:
+    - "Git"
+    - "Linux"
+  tools:
+    - "VS Code"
+
+constraints_and_preferences:
+  experience_band:
+    minimum_years: 1
+    maximum_years: 5
+  target_roles:
+    - "Software Engineer"
+    - "Backend Engineer"
+    - "AI Engineer"
+  acceptable_locations:
+    - "Remote"
+    - "Bangalore, India"
+  compensation_preference: "Competitive"
+  notifications:
+    daily_report_email: "your.email@example.com"

@@ -1,0 +1,52 @@
+# =============================================================================
+# settings.yaml — Global Configuration for AutoJobPilot
+# =============================================================================
+
+app:
+  name: "AutoJobPilot"
+  version: "1.0.0"
+  db_path: "data/job_hunt.db"
+  excel_path: "data/Job_Hunt_Tracker.xlsx"
+  resumes_dir: "data/resumes"
+  screenshots_dir: "data/screenshots"
+
+scraping:
+  default_platforms:
+    - "linkedin"
+    - "indeed"
+    - "glassdoor"
+    - "zip_recruiter"
+    - "google"
+  results_per_platform: 15
+  rate_limit_delay_seconds: 2.0
+  hours_old: 72 # Last 3 days
+
+matching:
+  min_match_score_to_shortlist: 65.0
+  min_match_score_to_auto_apply: 75.0
+  gemini_model: "gemini-2.5-flash"
+
+automation:
+  dry_run_default: true # If true, fills form but stops before final submission
+  headless: true
+  slow_mo_ms: 100
+  timeout_ms: 45000
+  max_concurrent_applications: 1
+  supported_ats:
+    - "linkedin_easy_apply"
+    - "greenhouse"
+    - "lever"
+    - "ashby"
+    - "generic"
+
+networking:
+  daily_max_emails: 10
+  send_email_automatically: false # If false, saves draft in DB for approval
+  smtp:
+    host: "smtp.gmail.com"
+    port: 587
+    use_tls: true
+    username: "${SMTP_USER}"
+    password: "${SMTP_PASS}"
+    from_name: "Ravi Kumar"
+    from_email: "${SMTP_USER}"

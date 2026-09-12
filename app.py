@@ -1,0 +1,665 @@
+"""
+app.py — AutoJobPilot Web Dashboard
+Modern, rich UI for autonomous job hunting, ATS scoring,
+multi-board search, Playwright auto-apply, and Excel tracking.
+"""
+
+import streamlit as st
+import os
+import asyncio
+import pandas as pd
+from datetime import datetime
+
+# Initialize page configuration
+st.set_page_config(
+    page_title="AutoJobPilot — Autonomous AI Job Hunter",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Custom High-End Styling (Glassmorphism, Vibrant Dark Mode Accents, Modern Typography)
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+    html, body, [class*="css"] {
+        font-family: 'Outfit', sans-serif;
+    }
+
+    /* Metric Cards */
+    [data-testid="stMetricValue"] {
+        font-size: 2rem !important;
+        font-weight: 700;
+        background: linear-gradient(135deg, #38bdf8 0%, #818cf8 50%, #c084fc 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+
+    .metric-card {
+        background: rgba(30, 41, 59, 0.7);
+        backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 16px;
+        padding: 20px;
+        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+        margin-bottom: 16px;
+    }
+
+    /* Gradient Hero Header */
+    .hero-container {
+        background: linear-gradient(135deg, rgba(15, 23, 42, 0.9) 0%, rgba(30, 27, 75, 0.8) 100%);
+        border: 1px solid rgba(99, 102, 241, 0.2);
+        border-radius: 20px;
+        padding: 28px 36px;
+        margin-bottom: 28px;
+        box-shadow: 0 10px 40px -10px rgba(79, 70, 229, 0.3);
+    }
+    .hero-title {
+        font-size: 2.3rem;
+        font-weight: 700;
+        background: linear-gradient(90deg, #60a5fa, #a78bfa, #f472b6);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 6px;
+    }
+    .hero-subtitle {
+        color: #94a3b8;
+        font-size: 1.05rem;
+    }
+
+    /* Job Card Styling */
+    .job-card {
+        background: rgba(30, 41, 59, 0.5);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 14px;
+        padding: 18px 24px;
+        margin-bottom: 14px;
+        transition: transform 0.2s ease, border-color 0.2s ease;
+    }
+    .job-card:hover {
+        border-color: rgba(99, 102, 241, 0.5);
+        transform: translateY(-2px);
+    }
+
+    /* Badge Tags */
+    .badge-score-high {
+        background: rgba(34, 197, 94, 0.15);
+        color: #4ade80;
+        border: 1px solid rgba(34, 197, 94, 0.3);
+        padding: 3px 10px;
+        border-radius: 20px;
+        font-weight: 600;
+        font-size: 0.85rem;
+    }
+    .badge-score-med {
+        background: rgba(234, 179, 8, 0.15);
+        color: #facc15;
+        border: 1px solid rgba(234, 179, 8, 0.3);
+        padding: 3px 10px;
+        border-radius: 20px;
+        font-weight: 600;
+        font-size: 0.85rem;
+    }
+    .badge-platform {
+        background: rgba(99, 102, 241, 0.15);
+        color: #818cf8;
+        border: 1px solid rgba(99, 102, 241, 0.3);
+        padding: 3px 10px;
+        border-radius: 20px;
+        font-size: 0.8rem;
+    }
+
+    /* Code & Output Blocks */
+    .code-box {
+        font-family: 'JetBrains Mono', monospace;
+        background: #0f172a;
+        color: #e2e8f0;
+        padding: 14px;
+        border-radius: 10px;
+        border: 1px solid #334155;
+        font-size: 0.88rem;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# Imports of Application Modules
+from core.profile import load_candidate_profile, save_candidate_profile, CandidateProfile
+from core.resume_parser import extract_text_from_pdf_bytes, generate_resume_pdf
+from core.scorer import score_job_with_gemini, calculate_ats_match
+from scrapers.job_scraper import JobScraper
+from scrapers.contact_finder import find_hiring_contact
+from networking.post_scanner import LinkedInPostScanner
+from networking.referral_finder import ReferralFinder
+from networking.emailer import generate_cold_email_draft, send_cold_email
+from automation.apply_engine import ApplyEngine, detect_platform
+from storage.database import Database
+from storage.excel_tracker import export_tracker_xlsx
+
+# State Initialization
+if "db" not in st.session_state:
+    st.session_state.db = Database()
+if "profile" not in st.session_state:
+    st.session_state.profile = load_candidate_profile()
+if "resume_text" not in st.session_state:
+    st.session_state.resume_text = ""
+if "apply_results" not in st.session_state:
+    st.session_state.apply_results = {}
+
+db = st.session_state.db
+profile = st.session_state.profile
+
+# --- Sidebar ---
+with st.sidebar:
+    st.image("https://img.icons8.com/isometric/100/lightning-bolt.png", width=64)
+    st.markdown("### **AutoJobPilot**")
+    st.caption("Autonomous AI Job Hunter & Application Suite")
+    st.divider()
+
+    # Active Candidate Badge
+    st.markdown(f"**Candidate:** `{profile.name}`")
+    st.markdown(f"**Target Role:** `{profile.primary_role}`")
+    st.caption(f"📍 {profile.location}")
+    st.divider()
+
+    # Execution Mode Toggles
+    st.markdown("#### ⚙️ Automation Settings")
+    dry_run_mode = st.toggle("Dry Run Safety Mode", value=True, help="When enabled, Playwright fills forms but halts before final submission.")
+    headless_mode = st.toggle("Headless Browser", value=True, help="Run Playwright invisibly in the background.")
+    api_key_input = st.text_input("Gemini API Key (Optional)", value=os.environ.get("GEMINI_API_KEY", ""), type="password")
+    if api_key_input:
+        os.environ["GEMINI_API_KEY"] = api_key_input
+
+    st.divider()
+
+    # Quick Metrics
+    metrics = db.get_metrics()
+    st.metric("Discovered Jobs", metrics["total_jobs"])
+    st.metric("Applications Submitted", metrics["applied_jobs"])
+    st.metric("LinkedIn Leads", metrics["linkedin_leads"])
+    st.metric("Avg Match Score", f"{metrics['avg_match_score']}%")
+
+    st.divider()
+    # Excel Download Shortcut
+    if st.button("📥 Generate & Download Excel Tracker", use_container_width=True, type="primary"):
+        excel_file = export_tracker_xlsx("data/Job_Hunt_Tracker.xlsx", db)
+        with open(excel_file, "rb") as f:
+            st.download_button(
+                label="⬇️ Save Job_Hunt_Tracker.xlsx",
+                data=f.read(),
+                file_name="Job_Hunt_Tracker.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+
+
+# --- Hero Header ---
+st.markdown("""
+<div class="hero-container">
+    <div class="hero-title">AutoJobPilot — Autonomous Career Agent</div>
+    <div class="hero-subtitle">Multi-Platform Job Search • ATS Keyword Optimizer • Playwright Auto-Apply • LinkedIn Hiring Radar • Excel Sync</div>
+</div>
+""", unsafe_allow_html=True)
+
+
+# --- Navigation Tabs ---
+tab_jobs, tab_apply, tab_posts, tab_referrals, tab_profile, tab_excel = st.tabs([
+    "💼 Job Discovery",
+    "🤖 Auto-Apply Center",
+    "📢 LinkedIn Hiring Radar",
+    "🤝 Referral Network",
+    "🎯 Resume & ATS Auditor",
+    "📊 Master Tracker & Excel"
+])
+
+
+# =============================================================================
+# TAB 1: JOB DISCOVERY
+# =============================================================================
+with tab_jobs:
+    st.subheader("Multi-Board Job Discovery")
+    st.caption("Scrape LinkedIn, Indeed, Glassdoor, ZipRecruiter, and Google concurrently with ATS keyword scoring.")
+
+    col1, col2, col3, col4 = st.columns([3, 2, 2, 1.5])
+    with col1:
+        search_query = st.text_input("Target Role / Title", value=profile.primary_role)
+    with col2:
+        search_loc = st.text_input("Location", value=profile.location or "Remote")
+    with col3:
+        platforms_selected = st.multiselect(
+            "Platforms",
+            ["linkedin", "indeed", "glassdoor", "zip_recruiter", "google"],
+            default=["linkedin", "indeed", "glassdoor"]
+        )
+    with col4:
+        st.write("")
+        st.write("")
+        trigger_search = st.button("🔍 Search Jobs", use_container_width=True, type="primary")
+
+    if trigger_search and search_query:
+        with st.status(f"Searching for '{search_query}' across {len(platforms_selected)} platforms...", expanded=True) as status:
+            scraper = JobScraper()
+            jobs = scraper.scrape(
+                search_term=search_query,
+                location=search_loc,
+                results_wanted=15,
+                platforms=platforms_selected,
+                is_remote="remote" in search_loc.lower()
+            )
+
+            st.write(f"Scraped {len(jobs)} jobs. Scoring with ATS engine...")
+            resume_text = st.session_state.resume_text or f"{profile.name} {profile.headline} {', '.join(profile.all_skills)}"
+
+            scored_count = 0
+            for j in jobs:
+                res = score_job_with_gemini(
+                    resume_text=resume_text,
+                    job_title=j["title"],
+                    company=j["company"],
+                    job_description=j.get("description", ""),
+                    candidate_skills=profile.all_skills
+                )
+                j["match_score"] = res["match_score"]
+                j["matched_keywords"] = res["matched_keywords"]
+                j["missing_keywords"] = res["missing_keywords"]
+                j["status"] = "shortlisted" if j["match_score"] >= 65.0 else "new"
+                db.upsert_job(j)
+                scored_count += 1
+
+            status.update(label=f"✅ Discovered & scored {scored_count} opportunities!", state="complete")
+            export_tracker_xlsx("data/Job_Hunt_Tracker.xlsx", db)
+            st.rerun()
+
+    st.divider()
+
+    # Filters and Job Cards
+    col_f1, col_f2, col_f3 = st.columns([2, 2, 2])
+    with col_f1:
+        min_score_filter = st.slider("Minimum Match Score (%)", min_value=0, max_value=100, value=50, step=5)
+    with col_f2:
+        status_filter = st.selectbox("Status Filter", ["All", "new", "shortlisted", "applied"])
+    with col_f3:
+        st.caption("Live Filtered Results")
+
+    filter_status_val = None if status_filter == "All" else status_filter
+    displayed_jobs = db.get_all_jobs(min_score=float(min_score_filter), status=filter_status_val)
+
+    if not displayed_jobs:
+        st.info("No jobs found matching the selected filters. Click 'Search Jobs' to find fresh opportunities.")
+    else:
+        st.markdown(f"**Found {len(displayed_jobs)} matching opportunities:**")
+        for j in displayed_jobs:
+            score = j.get("match_score", 0.0)
+            score_badge = f'<span class="badge-score-high">🟢 {score:.0f}% Match</span>' if score >= 70 else (
+                f'<span class="badge-score-med">🟡 {score:.0f}% Match</span>' if score >= 50 else f'<span class="badge-platform">⚪ {score:.0f}% Match</span>'
+            )
+            platform_badge = f'<span class="badge-platform">{j.get("source", "web").upper()}</span>'
+
+            with st.expander(f"{j['title']} @ {j['company']} — {j.get('location', 'Remote')} ({score:.0f}%)", expanded=False):
+                col_c1, col_c2 = st.columns([3, 1])
+                with col_c1:
+                    st.markdown(f"{score_badge} &nbsp; {platform_badge} &nbsp; **Status:** `{j.get('status', 'new').upper()}`", unsafe_allow_html=True)
+                    st.markdown(f"**Company:** {j['company']} | **Location:** {j.get('location', 'Remote')}")
+                    if j.get("job_url"):
+                        st.markdown(f"🔗 [Open Original Posting]({j['job_url']})")
+
+                    matched_kws = j.get("matched_keywords", [])
+                    if matched_kws:
+                        st.markdown("**Matched Skills:** " + " ".join([f"`{k}`" for k in matched_kws[:8]]))
+
+                    missing_kws = j.get("missing_keywords", [])
+                    if missing_kws:
+                        st.markdown("**Missing Skills / Gaps:** " + " ".join([f"`{k}`" for k in missing_kws[:6]]))
+
+                    desc = j.get("description", "")
+                    if desc:
+                        with st.expander("View Job Description"):
+                            st.write(desc[:1500] + ("..." if len(desc) > 1500 else ""))
+
+                with col_c2:
+                    if st.button("🚀 Auto-Apply", key=f"btn_apply_{j['id']}", use_container_width=True, type="primary"):
+                        st.session_state["target_apply_job"] = j
+                        st.success(f"Job queued for Auto-Apply. Switch to the 'Auto-Apply Center' tab!")
+
+
+# =============================================================================
+# TAB 2: AUTO-APPLY CENTER
+# =============================================================================
+with tab_apply:
+    st.subheader("Playwright Intelligent Auto-Apply Engine")
+    st.caption("Autonomously handles LinkedIn Easy Apply, Greenhouse, Lever, Ashby, and generic ATS application forms.")
+
+    shortlisted_jobs = db.get_all_jobs(min_score=50.0)
+
+    if not shortlisted_jobs:
+        st.warning("No shortlisted jobs in database yet. Search jobs in Tab 1 first.")
+    else:
+        col_a1, col_a2 = st.columns([2, 1])
+        with col_a1:
+            job_options = {f"{j['title']} @ {j['company']} ({j.get('match_score', 0):.0f}%) — {j.get('source','').upper()}": j['id'] for j in shortlisted_jobs}
+            selected_label = st.selectbox("Select Target Job to Apply", list(job_options.keys()))
+            selected_job_id = job_options[selected_label]
+            target_job = next(j for j in shortlisted_jobs if j["id"] == selected_job_id)
+
+        with col_a2:
+            st.markdown(f"**Detected ATS:** `{detect_platform(target_job.get('job_url', '')).upper()}`")
+            st.markdown(f"**Mode:** `{'DRY RUN (Safe)' if dry_run_mode else 'AUTONOMOUS SUBMIT'}`")
+            apply_now_btn = st.button("⚡ Execute Application", use_container_width=True, type="primary")
+
+        st.divider()
+
+        # Job details preview
+        col_d1, col_d2 = st.columns([2, 1])
+        with col_d1:
+            st.markdown(f"### {target_job['title']}")
+            st.markdown(f"**Company:** {target_job['company']} &nbsp;|&nbsp; **Location:** {target_job.get('location', 'Remote')}")
+            st.markdown(f"**URL:** [Apply Page Link]({target_job.get('job_url', '#')})")
+
+        with col_d2:
+            st.markdown("#### Candidate Credentials")
+            st.write(f"👤 **Name:** {profile.name}")
+            st.write(f"📧 **Email:** {profile.contact.email}")
+            st.write(f"📱 **Phone:** {profile.contact.phone}")
+            st.write(f"🔗 **LinkedIn:** {profile.contact.linkedin_url}")
+
+        if apply_now_btn:
+            with st.status(f"Automating application for {target_job['title']} @ {target_job['company']}...", expanded=True) as status:
+                # Ensure resume PDF is ready
+                pdf_path = "data/resumes/Candidate_Resume.pdf"
+                os.makedirs(os.path.dirname(pdf_path), exist_ok=True)
+                if not os.path.exists(pdf_path):
+                    resume_content = st.session_state.resume_text or f"{profile.name}\n{profile.headline}\n{profile.experience}"
+                    generate_resume_pdf(resume_content, pdf_path, candidate_name=profile.name, target_role=target_job["title"], company_name=target_job["company"])
+
+                apply_engine = ApplyEngine(profile=profile, headless=headless_mode, dry_run=dry_run_mode)
+
+                st.write(f"🌐 Launching Playwright browser in {'dry-run' if dry_run_mode else 'live'} mode...")
+                apply_res = asyncio.run(apply_engine.apply_to_job(
+                    job_url=target_job["job_url"],
+                    resume_pdf_path=pdf_path,
+                    dry_run=dry_run_mode
+                ))
+
+                st.session_state.apply_results[target_job["id"]] = apply_res
+
+                # Record in database
+                app_status = "submitted" if apply_res.get("status") == "submitted" else "prefilled"
+                db.record_application(
+                    job_id=target_job["id"],
+                    company=target_job["company"],
+                    title=target_job["title"],
+                    applied_to=target_job["job_url"],
+                    apply_method=apply_res.get("platform", "web"),
+                    status=app_status,
+                    screenshot_path=apply_res.get("screenshot", ""),
+                    notes=apply_res.get("message", "")
+                )
+                export_tracker_xlsx("data/Job_Hunt_Tracker.xlsx", db)
+
+                if apply_res.get("success"):
+                    status.update(label="✅ Application workflow completed!", state="complete")
+                    st.success(f"**Result:** {apply_res.get('message')}")
+                    if apply_res.get("screenshot") and os.path.exists(apply_res["screenshot"]):
+                        st.image(apply_res["screenshot"], caption="Browser Confirmation Screenshot", use_container_width=True)
+                else:
+                    status.update(label="⚠️ Application encountered an issue", state="error")
+                    st.error(f"**Error:** {apply_res.get('message')}")
+
+
+# =============================================================================
+# TAB 3: LINKEDIN HIRING RADAR
+# =============================================================================
+with tab_posts:
+    st.subheader("LinkedIn Hiring Post Scanner & Direct Recruiter Outreach")
+    st.caption("Scans active LinkedIn posts for hiring announcements, extracts recruiter emails, and drafts cold outreach.")
+
+    col_p1, col_p2 = st.columns([3, 1])
+    with col_p1:
+        post_scan_role = st.text_input("Role to Monitor", value=profile.primary_role, key="post_scan_role")
+    with col_p2:
+        st.write("")
+        st.write("")
+        scan_posts_btn = st.button("📡 Scan LinkedIn Posts", use_container_width=True, type="primary")
+
+    if scan_posts_btn:
+        with st.spinner("Scanning LinkedIn discussions and public posts for hiring calls..."):
+            post_scanner = LinkedInPostScanner()
+            posts = post_scanner.scan_posts(target_role=post_scan_role, target_skills=profile.core_skills)
+            for p in posts:
+                db.insert_linkedin_post(p)
+            export_tracker_xlsx("data/Job_Hunt_Tracker.xlsx", db)
+            st.success(f"Found {len(posts)} new hiring leads from LinkedIn posts!")
+            st.rerun()
+
+    posts = db.get_all_linkedin_posts()
+    if not posts:
+        st.info("No hiring posts scanned yet. Click 'Scan LinkedIn Posts' to discover live recruiter postings.")
+    else:
+        st.markdown(f"**Discovered {len(posts)} Recruiter Hiring Posts:**")
+        for p in posts:
+            with st.container():
+                st.markdown(f"""
+                <div class="job-card">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <h4 style="margin: 0; color: #60a5fa;">{p.get('author', 'Hiring Manager')} &nbsp;<span style="font-size: 0.85rem; color: #94a3b8;">({p.get('company', 'Tech Team')})</span></h4>
+                        <span class="badge-platform">{p.get('date_found', '')}</span>
+                    </div>
+                    <p style="color: #cbd5e1; margin-top: 8px; font-size: 0.95rem;">{p.get('snippet', '')}</p>
+                </div>
+                """, unsafe_allow_html=True)
+
+                col_b1, col_b2 = st.columns([2, 1])
+                with col_b1:
+                    if p.get("email"):
+                        st.markdown(f"📧 **Extracted Contact Email:** `{p['email']}`")
+                    if p.get("post_url"):
+                        st.markdown(f"🔗 [View LinkedIn Post]({p['post_url']})")
+
+                with col_b2:
+                    if p.get("email"):
+                        with st.popover("✉️ Draft & Send Cold Email"):
+                            draft = generate_cold_email_draft(
+                                candidate_name=profile.name,
+                                candidate_role=profile.primary_role,
+                                candidate_skills=profile.core_skills,
+                                company=p.get("company", "Your Team"),
+                                job_title=p.get("role", "Software Engineer"),
+                                recipient_name=p.get("author", "")
+                            )
+                            subj = st.text_input("Subject", value=draft["subject"], key=f"subj_{p['id']}")
+                            body = st.text_area("Body", value=draft["body"], height=200, key=f"body_{p['id']}")
+                            if st.button("Send Email", key=f"send_{p['id']}", type="primary"):
+                                st.info("Simulated email send. In live mode, connect your Gmail App Password in config/settings.yaml.")
+
+
+# =============================================================================
+# TAB 4: REFERRAL NETWORK
+# =============================================================================
+with tab_referrals:
+    st.subheader("LinkedIn Referral Finder & Connection Note Generator")
+    st.caption("Locate Engineering Managers, Leads, and Recruiters at target companies and generate tailored 300-char connection requests.")
+
+    col_r1, col_r2, col_r3 = st.columns([2.5, 2, 1.5])
+    with col_r1:
+        target_company = st.text_input("Target Company Name", value="Stripe", placeholder="e.g. Stripe, Google, Datadog")
+    with col_r2:
+        target_ref_role = st.text_input("Role to Pitch", value=profile.primary_role, key="ref_role")
+    with col_r3:
+        st.write("")
+        st.write("")
+        find_refs_btn = st.button("🔍 Find Top Profiles", use_container_width=True, type="primary")
+
+    if find_refs_btn and target_company:
+        with st.spinner(f"Mapping key technical stakeholders at {target_company}..."):
+            ref_finder = ReferralFinder()
+            profiles = ref_finder.find_top_profiles(company=target_company, role=target_ref_role)
+            for prof in profiles:
+                pitch = ref_finder.generate_outreach_pitch(
+                    contact_name=prof["name"],
+                    company=target_company,
+                    target_role=target_ref_role,
+                    candidate_name=profile.name,
+                    candidate_summary=f"{profile.headline} with skills in {', '.join(profile.core_skills[:3])}"
+                )
+                prof["connection_note"] = pitch["connection_note"]
+                prof["referral_pitch"] = pitch["referral_message"]
+                db.insert_referral_contact(prof)
+
+            export_tracker_xlsx("data/Job_Hunt_Tracker.xlsx", db)
+            st.success(f"Discovered {len(profiles)} key referral contacts at {target_company}!")
+            st.rerun()
+
+    contacts = db.get_all_referral_contacts()
+    if not contacts:
+        st.info("No referral contacts discovered yet. Enter a target company above to find recruiters and engineering managers.")
+    else:
+        st.markdown(f"**Saved Referral Contacts ({len(contacts)}):**")
+        for c in contacts:
+            with st.container():
+                st.markdown(f"""
+                <div class="job-card">
+                    <div style="display: flex; justify-content: space-between;">
+                        <h4 style="margin: 0; color: #818cf8;">{c.get('name', 'Contact')} &nbsp;<span style="font-size: 0.9rem; color: #94a3b8;">• {c.get('headline', '')}</span></h4>
+                        <span class="badge-platform">{c.get('company', '')}</span>
+                    </div>
+                    <div style="margin-top: 10px;">
+                        <a href="{c.get('linkedin_url', '#')}" target="_blank" style="color: #38bdf8; text-decoration: none;">🔗 Open LinkedIn Profile ↗</a>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                col_n1, col_n2 = st.columns([1, 1])
+                with col_n1:
+                    st.markdown("**Personalized 300-Char Connection Note:**")
+                    st.code(c.get("connection_note", ""), language="text")
+                with col_n2:
+                    st.markdown("**Referral Request InMail / Message:**")
+                    st.code(c.get("referral_pitch", ""), language="text")
+
+
+# =============================================================================
+# TAB 5: RESUME & ATS AUDITOR
+# =============================================================================
+with tab_profile:
+    st.subheader("Candidate Profile, Resume Upload & ATS Match Auditor")
+    st.caption("Upload your PDF resume, parse skills, and test ATS match scores against any target Job Description.")
+
+    col_u1, col_u2 = st.columns([1.5, 1])
+    with col_u1:
+        uploaded_resume = st.file_uploader("Upload Resume (PDF format)", type=["pdf"])
+        if uploaded_resume:
+            bytes_data = uploaded_resume.read()
+            parsed_text = extract_text_from_pdf_bytes(bytes_data)
+            st.session_state.resume_text = parsed_text
+            # Save file to disk
+            os.makedirs("data/resumes", exist_ok=True)
+            with open("data/resumes/Candidate_Resume.pdf", "wb") as f:
+                f.write(bytes_data)
+            st.success(f"✅ Successfully ingested resume ({len(parsed_text)} characters extracted)!")
+
+    with col_u2:
+        st.markdown("#### Candidate Summary")
+        st.write(f"**Name:** {profile.name}")
+        st.write(f"**Headline:** {profile.headline}")
+        st.write(f"**Email:** {profile.contact.email}")
+        st.write(f"**Phone:** {profile.contact.phone}")
+        st.write(f"**Core Skills:** {', '.join(profile.core_skills[:6])}")
+
+    st.divider()
+
+    # Interactive ATS Keyword Match Simulator
+    st.subheader("🎯 Live ATS Keyword Match Simulator")
+    st.caption("Paste any target Job Description below to audit keyword alignment and identify missing skills.")
+
+    sample_jd = st.text_area(
+        "Target Job Description",
+        height=180,
+        placeholder="Paste full job description text here..."
+    )
+
+    if st.button("⚡ Audit ATS Score", type="primary"):
+        if not sample_jd:
+            st.error("Please paste a job description first.")
+        else:
+            resume_content = st.session_state.resume_text or f"{profile.name} {profile.headline} {', '.join(profile.all_skills)}"
+            with st.spinner("Analyzing keyword density and semantic fit..."):
+                audit_res = score_job_with_gemini(
+                    resume_text=resume_content,
+                    job_title=profile.primary_role,
+                    company="Target Employer",
+                    job_description=sample_jd,
+                    candidate_skills=profile.all_skills
+                )
+
+                score = audit_res["match_score"]
+                col_s1, col_s2, col_s3 = st.columns([1, 1.5, 1.5])
+                with col_s1:
+                    st.metric("Overall ATS Score", f"{score:.0f}%")
+                with col_s2:
+                    st.markdown("**Matched Keywords:**")
+                    st.write(", ".join([f"`{k}`" for k in audit_res.get("matched_keywords", [])]) or "None detected")
+                with col_s3:
+                    st.markdown("**Missing / High-Priority Gaps:**")
+                    st.write(", ".join([f"`{k}`" for k in audit_res.get("missing_keywords", [])]) or "None")
+
+                if audit_res.get("tailored_pitch"):
+                    st.info(f"💡 **Recommended Pitch:** {audit_res['tailored_pitch']}")
+
+
+# =============================================================================
+# TAB 6: TRACKER & EXCEL EXPORTER
+# =============================================================================
+with tab_excel:
+    st.subheader("Database Master Tracker & Excel (.xlsx) Synchronization")
+    st.caption("View unified relational tables and download the styled 5-sheet master spreadsheet.")
+
+    # KPI summary cards
+    kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
+    kpi1.metric("Total Jobs", metrics["total_jobs"])
+    kpi2.metric("Shortlisted", metrics["shortlisted_jobs"])
+    kpi3.metric("Applied", metrics["applied_jobs"])
+    kpi4.metric("LinkedIn Leads", metrics["linkedin_leads"])
+    kpi5.metric("Referrals", metrics["referral_contacts"])
+
+    st.divider()
+
+    # Excel Download Button
+    excel_path = "data/Job_Hunt_Tracker.xlsx"
+    export_tracker_xlsx(excel_path, db)
+    with open(excel_path, "rb") as f:
+        st.download_button(
+            label="📥 Download Master Spreadsheet (Job_Hunt_Tracker.xlsx)",
+            data=f.read(),
+            file_name="Job_Hunt_Tracker.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary"
+        )
+
+    st.write("")
+    table_view = st.radio("Select View", ["All Jobs", "Applications Log", "LinkedIn Post Leads", "Referrals Network"], horizontal=True)
+
+    if table_view == "All Jobs":
+        all_j = db.get_all_jobs()
+        if all_j:
+            df = pd.DataFrame(all_j)[["id", "title", "company", "location", "source", "match_score", "status", "date_posted", "job_url"]]
+            st.dataframe(df, use_container_width=True)
+        else:
+            st.info("No jobs recorded yet.")
+    elif table_view == "Applications Log":
+        all_a = db.get_all_applications()
+        if all_a:
+            st.dataframe(pd.DataFrame(all_a), use_container_width=True)
+        else:
+            st.info("No applications submitted yet.")
+    elif table_view == "LinkedIn Post Leads":
+        all_p = db.get_all_linkedin_posts()
+        if all_p:
+            st.dataframe(pd.DataFrame(all_p), use_container_width=True)
+        else:
+            st.info("No LinkedIn post leads found yet.")
+    elif table_view == "Referrals Network":
+        all_r = db.get_all_referral_contacts()
+        if all_r:
+            st.dataframe(pd.DataFrame(all_r), use_container_width=True)
+        else:
+            st.info("No referral contacts mapped yet.")
